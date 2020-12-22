@@ -255,11 +255,13 @@ func (pm *ProtocolManager) makeProtocol(version uint) p2p.Protocol {
 	}
 }
 
-func (pm *ProtocolManager) removePeer(id string) {
-	// Short circuit if the peer was already removed
+// cleanUpPeer removes the peer from the protocol's various services.
+// It returns the peer, or nil if the peer had already been cleaned up previously.
+func (pm *ProtocolManager) cleanUpPeer(id string) *peer {
+	// Short circuit if the cleanup has already been done
 	peer := pm.peers.Peer(id)
 	if peer == nil {
-		return
+		return nil
 	}
 	log.Debug("Removing Ethereum peer", "peer", id)
 
@@ -276,9 +278,16 @@ func (pm *ProtocolManager) removePeer(id string) {
 	if err := pm.peers.Unregister(id); err != nil {
 		log.Error("Peer removal failed", "peer", id, "err", err)
 	}
-	// Hard disconnect at the networking layer
+	return peer
+}
+
+// removePeer cleans up the peer and then disconnects it at the p2p (networking) layer.
+// The caller of removePeer is responsible for logging any relevant error information.
+func (pm *ProtocolManager) removePeer(id string) {
+	peer := pm.cleanUpPeer(id)
 	if peer != nil {
-		peer.Peer.Disconnect(p2p.DiscUselessPeer)
+		// Hard disconnect at the networking layer
+		peer.Peer.Disconnect(p2p.DiscSubprotocolError)
 	}
 }
 
@@ -380,7 +389,7 @@ func (pm *ProtocolManager) handle(p *peer) error {
 		p.Log().Error("Ethereum peer registration failed", "err", err)
 		return err
 	}
-	defer pm.removePeer(p.id)
+	defer pm.cleanUpPeer(p.id)
 
 	// Register the peer in the downloader. If the downloader considers it banned, we disconnect
 	if err := pm.downloader.RegisterPeer(p.id, p.version, p); err != nil {
